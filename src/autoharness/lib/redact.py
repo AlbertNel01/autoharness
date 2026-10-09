@@ -63,7 +63,7 @@ def _overlaps(spans, start, end):
 
 def redact(text, rules_path=None):
     spans = []
-    key = str(rules_path) if rules_path else str(config.REDACTION_RULES)
+    key = str(Path(rules_path if rules_path else config.REDACTION_RULES).resolve())
     for category, name, rx, validator in _rules(key):
         for match in rx.finditer(text):
             if validator is not None and not validator(match.group(0)):
@@ -85,7 +85,7 @@ def redact(text, rules_path=None):
 
 def secret_hits(text, rules_path=None):
     """Names of the secret rules *text* matches — a gate, not a rewrite (PII stays redact-only)."""
-    key = str(rules_path) if rules_path else str(config.REDACTION_RULES)
+    key = str(Path(rules_path if rules_path else config.REDACTION_RULES).resolve())
     return [
         name
         for category, name, rx, validator in _rules(key)
