@@ -128,3 +128,23 @@ def test_removal_blocks_referenced_legacy_period_filename(tmp_path):
     assert server.stage(remove, run_id="legacy-remove", root=tmp_path)["ok"]
     assert not promoter.drain("legacy-remove", roots=roots)[0]["ok"]
     assert script.exists()
+
+
+@pytest.mark.parametrize("pointer", ["https://example.test/scripts/run.sh", "foo/scripts/run.sh"])
+def test_external_or_nested_prefix_does_not_block_local_removal(tmp_path, pointer):
+    roots = {"project": tmp_path, "global": tmp_path / "unused"}
+    skill_store.write_body("project", "run", BODY.format(pointer=pointer), tmp_path)
+    sidecar.create("project", "run", 0, tmp_path)
+    directory = skill_store.skill_path("project", "run", tmp_path).parent / "scripts"
+    directory.mkdir()
+    script = directory / "run.sh"
+    script.write_text(SCRIPT, encoding="utf-8")
+    update = {"action": "update", "name": "run", "body": BODY.format(pointer=pointer),
+              "reason": "retain external example", "evidence": "fixture"}
+    assert server.stage(update, run_id="external-update", root=tmp_path)["ok"]
+    assert promoter.drain("external-update", roots=roots)[0]["ok"]
+    remove = {"action": "remove_file", "name": "run", "path": "scripts/run.sh",
+              "reason": "remove unrelated local helper", "evidence": "fixture"}
+    assert server.stage(remove, run_id="external-remove", root=tmp_path)["ok"]
+    assert promoter.drain("external-remove", roots=roots)[0]["ok"]
+    assert not script.exists()

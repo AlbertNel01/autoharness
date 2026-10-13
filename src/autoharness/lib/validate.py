@@ -29,7 +29,7 @@ _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n)?", re.DOTALL)
 _PLACEHOLDER = re.compile(r"\b(TODO|FIXME|XXX):|<(?:TODO|FIXME|XXX|TBD|PLACEHOLDER|REPLACE[_ ]?ME|INSERT[_ ]?HERE|FILL[_ ]?IN)>")
 _ABS_PATH = re.compile(r"(?:/home/|/Users/|/root/)[^\s`)\]]+|[A-Za-z]:\\[^\s`)\]]+")
 _PY_REF = re.compile(r"[\w./-]+\.py")
-_SUBFILE_REF = re.compile(r"\b(?:{})/[A-Za-z0-9._/-]+".format("|".join(layer.SUBFILE_DIRS)))
+_SUBFILE_REF = re.compile(r"(?<![A-Za-z0-9_./-])(?:\./)?(?:{})/[A-Za-z0-9._/-]+".format("|".join(layer.SUBFILE_DIRS)))
 _MODIFY = ("update", "patch", "remove_file", "delete")
 # description-as-trigger proxy: a firing description names WHEN to use it ("use when …") or lists a
 # literal phrase the user would type (quoted). A bare topic-label has neither and never fires.
@@ -151,7 +151,7 @@ def subfile_references(body, *, base_dir, files=None):
     base = base_dir.resolve()
     code_spans, seen_refs = _backtick_spans(body), set()
     for match in _SUBFILE_REF.finditer(body):
-        ref = match.group()
+        ref = match.group().removeprefix("./")
         in_code = any(start <= match.start() < end for start, end in code_spans)
         if not (base_dir / ref).resolve().is_relative_to(base):
             continue
