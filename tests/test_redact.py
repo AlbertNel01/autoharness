@@ -47,6 +47,32 @@ def test_credit_card_still_redacts_valid_numbers():
     assert out.count("[REDACTED:pii:credit_card]") == 3
 
 
+def test_each_rule_reports_itself_and_placeholders_are_never_rematched():
+    # a rule's placeholder must survive the rules ordered after it: `secret:<name>`
+    # inside it is itself an api_key_assignment match once the name is long enough.
+    cases = {
+        "AKIAABCDEFGHIJKLMNOP": "[REDACTED:secret:aws_access_key_id]",
+        "-----BEGIN RSA PRIVATE KEY-----": "[REDACTED:secret:private_key_block]",
+        "ghp_abcdefghij0123456789": "[REDACTED:secret:github_token]",
+        "xoxb-1234567890-abcdef": "[REDACTED:secret:slack_token]",
+        "Authorization: Bearer glpat-AbCdEfGhIjKlMnOpQrStU": (
+            "Authorization: [REDACTED:secret:bearer_token]"
+        ),
+        "api_key=sk_live_abcd1234EFGH5678ijkl": "[REDACTED:secret:api_key_assignment]",
+    }
+    for raw, expected in cases.items():
+        out = redact.redact(raw)
+        assert out == expected, f"{raw!r} -> {out!r}"
+        assert "[REDACTED:[REDACTED:" not in out, f"nested placeholder for {raw!r}"
+
+
+def test_overlapping_rules_keep_the_earlier_rule_in_the_file():
+    # github_token is ordered before api_key_assignment; the wider assignment match
+    # overlaps it, so the narrower, earlier rule owns the span.
+    raw = "token = ghp_abcdefghij0123456789"
+    assert redact.redact(raw) == "token = [REDACTED:secret:github_token]"
+
+
 def test_unknown_validator_name_fails_loud_at_rule_load():
     import tempfile
 
