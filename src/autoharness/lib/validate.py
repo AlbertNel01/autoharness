@@ -41,18 +41,81 @@ def _has_cue(text):
     return bool(_WHEN.search(text) or _QUOTED_PHRASE.search(text))
 
 
+def _block_scalar(lines, start, parent_indent, header):
+    """Decode a flat string field's YAML literal/folded scalar, not a general YAML document."""
+    modifiers = header.split("#", 1)[0].strip()[1:]
+    explicit = next((int(ch) for ch in modifiers if ch.isdigit()), None)
+    end = start
+    while end < len(lines) and (not lines[end].strip(" ")
+                                or len(lines[end]) - len(lines[end].lstrip(" ")) > parent_indent):
+        end += 1
+    raw = lines[start:end]
+    first = next((i for i, line in enumerate(raw) if line.strip(" ")), None)
+    indent = parent_indent + explicit if explicit else (
+        len(raw[first]) - len(raw[first].lstrip(" ")) if first is not None else max([parent_indent + 1, *(len(line) for line in raw)])
+    )
+    if explicit is None and first is not None and any(len(line) > indent for line in raw[:first]):
+        raise ValueError("leading empty scalar line exceeds detected indentation")
+    for offset, line in enumerate(raw):
+        if (line.lstrip(" ").startswith("#")
+                and len(line) - len(line.lstrip(" ")) < indent):
+            raw, end = raw[:offset], start + offset
+            break  # a dedented trailing comment is outside the scalar
+    content = []
+    for line in raw:
+        if line.strip(" ") and len(line) - len(line.lstrip(" ")) < indent:
+            raise ValueError("block scalar line is less indented than its content")
+        content.append(line[indent:] if len(line) >= indent else "")
+    chunks, index = [], 0
+    while index < len(content):
+        line = content[index]
+        if not line:
+            chunks.append("\n")
+            index += 1
+            continue
+        chunks.append(line)
+        following = index + 1
+        while following < len(content) and not content[following]:
+            following += 1
+        if (header[0] == ">" and following < len(content)
+                and not line.startswith((" ", "\t"))
+                and not content[following].startswith((" ", "\t"))):
+            chunks.append(" " if following == index + 1 else "\n" * (following - index - 1))
+        else:
+            chunks.append("\n" * (following - index))
+        index = following
+    value = "".join(chunks)
+    if "-" in modifiers:
+        value = value.rstrip("\n")
+    elif "+" not in modifiers:
+        value = value.rstrip("\n")
+        if value:
+            value += "\n"
+    return value, end
+
+
 def _frontmatter(body):
+    """Read flat string fields: plain/quoted values and YAML literal/folded block scalars."""
     m = _FRONTMATTER.match(body)
     if not m:
         return None
     fm = {}
-    for line in m.group(1).splitlines():
+    lines = (m.group(1) + "\n").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
         s = line.strip()
         if not s or s.startswith("#") or ":" not in line:
             continue
         key, value = line.split(":", 1)
         v = value.strip()
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+        if re.fullmatch(r"[>|](?:[1-9][-+]?|[-+][1-9]?)?(?:[ \t]+#.*)?", v):
+            try:
+                v, index = _block_scalar(lines, index, len(line) - len(line.lstrip(" ")), v)
+            except ValueError:
+                return None
+        elif len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
             v = v[1:-1]
         fm[key.strip()] = v
     return fm
