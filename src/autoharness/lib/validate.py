@@ -126,6 +126,26 @@ def check_files(files, *, base_dir=None, creating=False):
     return findings
 
 
+def _backtick_spans(text):
+    """Balanced backtick code spans; an unmatched/escaped opener is ordinary prose."""
+    ticks = list(re.finditer(r"`+", text))
+    spans, index = [], 0
+    while index < len(ticks):
+        opener = ticks[index]
+        prefix = text[:opener.start()]
+        if (len(prefix) - len(prefix.rstrip("\\"))) % 2:
+            index += 1
+            continue
+        closer = next((i for i in range(index + 1, len(ticks))
+                       if ticks[i].group() == opener.group()), None)
+        if closer is None:
+            index += 1
+            continue
+        spans.append((opener.end(), ticks[closer].start()))
+        index = closer + 1
+    return spans
+
+
 def _structure(body, base_dir, files=None):
     findings = []
     fm = _frontmatter(body)
@@ -153,11 +173,26 @@ def _structure(body, base_dir, files=None):
                     ast.parse(f.read_text())
                 except SyntaxError as exc:
                     findings.append(("structure", f"referenced {ref} has syntax error: {exc}"))
-        for ref in set(_SUBFILE_REF.findall(body)):
+        code_spans, seen_refs = _backtick_spans(body), set()
+        for match in _SUBFILE_REF.finditer(body):
+            ref = match.group()
+            in_code = any(start <= match.start() < end for start, end in code_spans)
             # escaping refs are skipped silently: writes are gated by the
             # promoter's landing check, validation must not probe outside
-            if (base_dir / ref).resolve().is_relative_to(base) \
-                    and ref not in (files or {}) and not (base_dir / ref).is_file():
+            if not (base_dir / ref).resolve().is_relative_to(base):
+                continue
+            # A sentence's full stop belongs to the prose, unless that exact
+            # filename is carried or already exists (legacy names may end in '.').
+            if not in_code and ref.endswith(".") and ref not in (files or {}) and not (base_dir / ref).is_file():
+                plain = ref.rstrip(".")
+                candidate = base_dir / plain
+                if candidate.resolve().is_relative_to(base) \
+                        and (plain in (files or {}) or candidate.is_file()):
+                    ref = plain
+            if ref in seen_refs:
+                continue
+            seen_refs.add(ref)
+            if ref not in (files or {}) and not (base_dir / ref).is_file():
                 findings.append(("structure", f"referenced {ref} neither carried in intent nor live"))
     for rel in files or {}:
         if isinstance(rel, str) and rel not in body:
