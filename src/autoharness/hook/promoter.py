@@ -165,6 +165,15 @@ def promote(intent, *, roots=None, repo_name=None):
         return _reject(action, level,
                        [("routing", "global layer is disabled by AUTOHARNESS_DISABLE_GLOBAL")])
 
+    if level == layer.GLOBAL:
+        # Per-project drain locks cannot coordinate another project's edits to
+        # the same global library. Keep local-only promotions independent.
+        with lock.file_lock(layer.state_dir(level, roots.get(level)) / "promote.lock"):
+            return _promote_resolved(intent, action, name, level, roots, repo_name)
+    return _promote_resolved(intent, action, name, level, roots, repo_name)
+
+
+def _promote_resolved(intent, action, name, level, roots, repo_name):
     root = roots.get(level)
     try:
         body = _shape(intent, level, root)
