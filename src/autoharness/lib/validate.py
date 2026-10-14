@@ -29,7 +29,7 @@ _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n)?", re.DOTALL)
 _PLACEHOLDER = re.compile(r"\b(TODO|FIXME|XXX):|<(?:TODO|FIXME|XXX|TBD|PLACEHOLDER|REPLACE[_ ]?ME|INSERT[_ ]?HERE|FILL[_ ]?IN)>")
 _ABS_PATH = re.compile(r"(?:/home/|/Users/|/root/)[^\s`)\]]+|[A-Za-z]:\\[^\s`)\]]+")
 _PY_REF = re.compile(r"[\w./-]+\.py")
-_SUBFILE_REF = re.compile(r"\b(?:{})/[A-Za-z0-9._/-]+".format("|".join(layer.SUBFILE_DIRS)))
+_SUBFILE_REF = re.compile(r"(?<![A-Za-z0-9_./-])(?:\./)?(?:{})/[A-Za-z0-9._/-]+".format("|".join(layer.SUBFILE_DIRS)))
 _MODIFY = ("update", "patch", "remove_file", "delete")
 # description-as-trigger proxy: a firing description names WHEN to use it ("use when …") or lists a
 # literal phrase the user would type (quoted). A bare topic-label has neither and never fires.
@@ -126,6 +126,46 @@ def check_files(files, *, base_dir=None, creating=False):
     return findings
 
 
+def _backtick_spans(text):
+    """Balanced backtick code spans; an unmatched/escaped opener is ordinary prose."""
+    ticks = list(re.finditer(r"`+", text))
+    spans, index = [], 0
+    while index < len(ticks):
+        opener = ticks[index]
+        prefix = text[:opener.start()]
+        if (len(prefix) - len(prefix.rstrip("\\"))) % 2:
+            index += 1
+            continue
+        closer = next((i for i in range(index + 1, len(ticks))
+                       if ticks[i].group() == opener.group()), None)
+        if closer is None:
+            index += 1
+            continue
+        spans.append((opener.end(), ticks[closer].start()))
+        index = closer + 1
+    return spans
+
+
+def subfile_references(body, *, base_dir, files=None):
+    """Resolve terminal prose punctuation against contextual paths for all consumers."""
+    base = base_dir.resolve()
+    code_spans, seen_refs = _backtick_spans(body), set()
+    for match in _SUBFILE_REF.finditer(body):
+        ref = match.group().removeprefix("./")
+        in_code = any(start <= match.start() < end for start, end in code_spans)
+        if not (base_dir / ref).resolve().is_relative_to(base):
+            continue
+        if not in_code and ref.endswith(".") and ref not in (files or {}) and not (base_dir / ref).is_file():
+            plain = ref.rstrip(".")
+            candidate = base_dir / plain
+            if candidate.resolve().is_relative_to(base) \
+                    and (plain in (files or {}) or candidate.is_file()):
+                ref = plain
+        if ref not in seen_refs:
+            seen_refs.add(ref)
+            yield ref
+
+
 def _structure(body, base_dir, files=None):
     findings = []
     fm = _frontmatter(body)
@@ -153,11 +193,8 @@ def _structure(body, base_dir, files=None):
                     ast.parse(f.read_text())
                 except SyntaxError as exc:
                     findings.append(("structure", f"referenced {ref} has syntax error: {exc}"))
-        for ref in set(_SUBFILE_REF.findall(body)):
-            # escaping refs are skipped silently: writes are gated by the
-            # promoter's landing check, validation must not probe outside
-            if (base_dir / ref).resolve().is_relative_to(base) \
-                    and ref not in (files or {}) and not (base_dir / ref).is_file():
+        for ref in subfile_references(body, base_dir=base_dir, files=files):
+            if ref not in (files or {}) and not (base_dir / ref).is_file():
                 findings.append(("structure", f"referenced {ref} neither carried in intent nor live"))
     for rel in files or {}:
         if isinstance(rel, str) and rel not in body:

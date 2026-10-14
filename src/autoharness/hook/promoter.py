@@ -28,7 +28,6 @@ ponytail: one drain per project root is now serialized through lib.lock (see dra
 """
 import hashlib
 import json
-import re
 
 from autoharness import config
 from autoharness.lib import (
@@ -113,9 +112,9 @@ def _remove_subfile(level, name, rel, root):
     if not p.resolve().is_relative_to(sdir):
         raise ValueError(f"subfile escapes the skill dir: {rel}")
     live = skill_store.read_body(level, name, root) or ""
-    # Use word-boundary check so scripts/run.py does not match scripts/run.py.bak
-    _ref = re.compile(r"(?<![A-Za-z0-9_./-])" + re.escape(rel) + r"(?![A-Za-z0-9_./-])")
-    if _ref.search(live):
+    # Use the same contextual pointer interpretation as admission. Mark the
+    # requested path known even if it is already absent: its pointer still needs patching out.
+    if rel in validate.subfile_references(live, base_dir=sdir, files={rel: ""}):
         raise ValueError(f"{rel} is still referenced by the live SKILL.md (patch the pointer out first)")
     if p.is_file():
         p.unlink()
