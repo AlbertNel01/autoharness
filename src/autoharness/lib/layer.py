@@ -8,8 +8,10 @@ The project layer's identity is the session cwd — except inside a linked git w
 remapped to the main worktree root, so counters / intents / skills from all worktrees of one repo
 land in one place and survive worktree removal. Only the linked-worktree case is remapped (git-dir
 differs from git-common-dir): plain repos, repo subdirectories, and non-git directories keep cwd
-verbatim, so a nested project can never be attributed to an enclosing repo. Any git failure falls
-back to cwd (fail-safe).
+verbatim, so a nested project can never be attributed to an enclosing repo. The one exception is a
+cwd inside a repo's `.claude` dir (a session started in <repo>/.claude/skills): that dir holds the
+project's config and is never a project itself, so it maps to the dir that owns it. Any git failure
+falls back to cwd (fail-safe).
 """
 import re
 import subprocess
@@ -65,9 +67,32 @@ def _main_worktree_root_resolved(cwd):
         git_dir, common_dir = ((Path(cwd) / line).resolve() for line in lines[:2])
         if git_dir != common_dir:
             return common_dir.parent
+        return _owner_of_config_dir(Path(cwd))
     except (OSError, subprocess.SubprocessError):
         pass
     return Path(cwd)
+
+
+def _owner_of_config_dir(path):
+    """Left as-is: a path outside any `.claude`, one under the home `.claude` (its owner's `.claude` is
+    the global layer, so mapping would merge the two layers), and a separate repo checked out inside
+    a `.claude` (a nested project keeps its own root)."""
+    if ".claude" not in path.parts:
+        return path
+    config = Path(*path.parts[:path.parts.index(".claude") + 1])
+    if config.parent == Path.home().resolve():
+        return path
+    proc = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=path, capture_output=True, text=True, timeout=5,
+    )
+    toplevel = proc.stdout.strip()
+    if proc.returncode != 0 or not toplevel:
+        return path
+    toplevel = Path(toplevel).resolve()
+    if toplevel != config and toplevel.is_relative_to(config):
+        return path
+    return config.parent
 
 
 def default_root(layer):
